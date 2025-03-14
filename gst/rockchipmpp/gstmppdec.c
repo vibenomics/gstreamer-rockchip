@@ -233,6 +233,7 @@ static void
 gst_mpp_dec_reset (GstVideoDecoder * decoder, gboolean drain, gboolean final)
 {
   GstMppDec *self = GST_MPP_DEC (decoder);
+  GList *frames;
 
   GST_MPP_DEC_LOCK (decoder);
 
@@ -249,6 +250,13 @@ gst_mpp_dec_reset (GstVideoDecoder * decoder, gboolean drain, gboolean final)
   self->mpi->reset (self->mpp_ctx);
   self->task_ret = GST_FLOW_OK;
   self->decoded_frames = 0;
+
+  /* Clear pending frames */
+  frames = gst_video_decoder_get_frames (decoder);
+  for (; frames; frames = frames->next) {
+    GstVideoCodecFrame *f = frames->data;
+    gst_video_decoder_release_frame (decoder, f);
+  }
 
   GST_MPP_DEC_UNLOCK (decoder);
 }
