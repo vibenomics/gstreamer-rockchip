@@ -353,7 +353,7 @@ gst_mpp_jpeg_dec_get_mpp_packet (GstVideoDecoder * decoder,
   return mpkt;
 }
 
-static gboolean
+static MPP_RET
 gst_mpp_jpeg_dec_send_mpp_packet (GstVideoDecoder * decoder,
     MppPacket mpkt, gint timeout_ms)
 {
@@ -387,7 +387,7 @@ gst_mpp_jpeg_dec_send_mpp_packet (GstVideoDecoder * decoder,
   if (mppdec->mpi->enqueue (mppdec->mpp_ctx, MPP_PORT_INPUT, mtask))
     goto error;
 
-  return TRUE;
+  return MPP_OK;
 
 error:
   if (mtask) {
@@ -399,7 +399,7 @@ error:
   if (mframe)
     mpp_frame_deinit (&mframe);
 
-  return FALSE;
+  return MPP_NOK;
 }
 
 static MppFrame

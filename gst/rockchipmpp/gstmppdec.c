@@ -39,7 +39,7 @@ G_DEFINE_ABSTRACT_TYPE (GstMppDec, gst_mpp_dec, GST_TYPE_VIDEO_DECODER);
     GST_TYPE_MPP_DEC, GstMppDecClass))
 
 #define MPP_OUTPUT_TIMEOUT_MS 200       /* Block timeout for MPP output queue */
-#define MPP_INPUT_TIMEOUT_MS 2000       /* Block timeout for MPP input queue */
+#define MPP_INPUT_TIMEOUT_MS 10 /* Block timeout for MPP input queue */
 
 #define MPP_TO_GST_PTS(pts) ((pts) * GST_MSECOND)
 
@@ -55,20 +55,6 @@ G_DEFINE_ABSTRACT_TYPE (GstMppDec, gst_mpp_dec, GST_TYPE_VIDEO_DECODER);
 
 #define GST_MPP_DEC_UNLOCK(decoder) \
   g_mutex_unlock (GST_MPP_DEC_MUTEX (decoder));
-
-#define GST_MPP_DEC_EVENT_MUTEX(decoder) (&GST_MPP_DEC (decoder)->event_mutex)
-#define GST_MPP_DEC_EVENT_COND(decoder) (&GST_MPP_DEC (decoder)->event_cond)
-
-#define GST_MPP_DEC_BROADCAST(decoder) \
-  g_mutex_lock (GST_MPP_DEC_EVENT_MUTEX (decoder)); \
-  g_cond_broadcast (GST_MPP_DEC_EVENT_COND (decoder)); \
-  g_mutex_unlock (GST_MPP_DEC_EVENT_MUTEX (decoder));
-
-#define GST_MPP_DEC_WAIT(decoder) \
-  g_mutex_lock (GST_MPP_DEC_EVENT_MUTEX (decoder)); \
-  g_cond_wait (GST_MPP_DEC_EVENT_COND (decoder), \
-      GST_MPP_DEC_EVENT_MUTEX (decoder)); \
-  g_mutex_unlock (GST_MPP_DEC_EVENT_MUTEX (decoder));
 
 #define DEFAULT_PROP_ROTATION 0
 #define DEFAULT_PROP_WIDTH 0    /* Original */
@@ -291,9 +277,6 @@ gst_mpp_dec_start (GstVideoDecoder * decoder)
 
   g_mutex_init (&self->mutex);
 
-  g_mutex_init (&self->event_mutex);
-  g_cond_init (&self->event_cond);
-
   GST_DEBUG_OBJECT (self, "started");
 
   return TRUE;
@@ -321,9 +304,6 @@ gst_mpp_dec_stop (GstVideoDecoder * decoder)
   GST_VIDEO_DECODER_STREAM_LOCK (decoder);
   gst_mpp_dec_reset (decoder, FALSE, TRUE);
   GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
-
-  g_cond_clear (&self->event_cond);
-  g_mutex_clear (&self->event_mutex);
 
   g_mutex_clear (&self->mutex);
 
@@ -1043,9 +1023,6 @@ out:
     gst_pad_pause_task (decoder->srcpad);
   }
 
-  /* Notify task status or pending frame changes */
-  GST_MPP_DEC_BROADCAST (decoder);
-
   GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
   return;
 info_change:
@@ -1064,15 +1041,36 @@ drop:
 }
 
 static GstFlowReturn
+gst_mpp_dec_send_mpp_packet_unlocked (GstVideoDecoder * decoder, MppPacket mpkt)
+{
+  GstMppDecClass *klass = GST_MPP_DEC_GET_CLASS (decoder);
+  GstMppDec *self = GST_MPP_DEC (decoder);
+
+  while (1) {
+    if (self->task_ret != GST_FLOW_OK)
+      return self->task_ret;
+
+    switch (klass->send_mpp_packet (decoder, mpkt, MPP_INPUT_TIMEOUT_MS)) {
+      case MPP_OK:
+        return GST_FLOW_OK;
+      case MPP_ERR_BUFFER_FULL:
+        /* Timed out */
+        break;
+      default:
+        /* Unknown error */
+        return GST_FLOW_ERROR;
+    }
+  }
+}
+
+static GstFlowReturn
 gst_mpp_dec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
 {
   GstMppDecClass *klass = GST_MPP_DEC_GET_CLASS (decoder);
   GstMppDec *self = GST_MPP_DEC (decoder);
   GstMapInfo mapinfo = { 0, };
   GstBuffer *tmp;
-  GstClockTime start_time, deadline_time;
   GstFlowReturn ret;
-  gint interval_ms = 5;
   MppPacket mpkt = NULL;
 
   GST_MPP_DEC_LOCK (decoder);
@@ -1081,29 +1079,6 @@ gst_mpp_dec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
 
   if (G_UNLIKELY (self->flushing))
     goto flushing;
-
-  /* Avoid holding too many frames */
-  while (1) {
-    GList *frames;
-    gboolean busy = FALSE;
-
-    if (self->task_ret != GST_FLOW_OK)
-      break;
-
-    frames = gst_video_decoder_get_frames (decoder);
-    if (frames) {
-      busy = g_list_length (frames) >= 4;
-      g_list_free_full (frames, (GDestroyNotify) gst_video_codec_frame_unref);
-    }
-
-    if (!busy)
-      break;
-
-    /* Waiting for the decoding thread to catch up */
-    GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
-    GST_MPP_DEC_WAIT (decoder);
-    GST_VIDEO_DECODER_STREAM_LOCK (decoder);
-  }
 
   if (!self->allocator) {
     MppBufferGroup group;
@@ -1138,19 +1113,14 @@ gst_mpp_dec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   if (GST_CLOCK_TIME_IS_VALID (frame->pts))
     self->seen_valid_pts = TRUE;
 
-  start_time = gst_util_get_timestamp ();
-  deadline_time = start_time + MPP_INPUT_TIMEOUT_MS * GST_MSECOND;
   GST_VIDEO_DECODER_STREAM_UNLOCK (decoder);
-  while (1) {
-    if (klass->send_mpp_packet (decoder, mpkt, interval_ms))
-      break;
-
-    if (gst_util_get_timestamp () > deadline_time) {
-      GST_VIDEO_DECODER_STREAM_LOCK (decoder);
-      goto send_error;
-    }
-  }
+  ret = gst_mpp_dec_send_mpp_packet_unlocked (decoder, mpkt);
   GST_VIDEO_DECODER_STREAM_LOCK (decoder);
+
+  if (G_UNLIKELY (ret == GST_FLOW_ERROR))
+    goto send_error;
+  else if (G_UNLIKELY (ret != GST_FLOW_OK))
+    goto drop;
 
   /* NOTE: Sub-class takes over the MPP packet when success */
   mpkt = NULL;

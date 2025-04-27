@@ -233,26 +233,20 @@ gst_mpp_video_dec_get_mpp_packet (GstVideoDecoder * decoder UNUSED,
   return mpkt;
 }
 
-static gboolean
+static MPP_RET
 gst_mpp_video_dec_send_mpp_packet (GstVideoDecoder * decoder,
     MppPacket mpkt, gint timeout_ms)
 {
   GstMppDec *mppdec = GST_MPP_DEC (decoder);
-  gint interval_ms = 2;
   MPP_RET ret;
 
-  do {
-    ret = mppdec->mpi->decode_put_packet (mppdec->mpp_ctx, mpkt);
-    if (!ret) {
-      mpp_packet_deinit (&mpkt);
-      return TRUE;
-    }
+  mppdec->mpi->control (mppdec->mpp_ctx, MPP_SET_INPUT_TIMEOUT, &timeout_ms);
 
-    g_usleep (interval_ms * 1000);
-    timeout_ms -= interval_ms;
-  } while (timeout_ms > 0);
+  ret = mppdec->mpi->decode_put_packet (mppdec->mpp_ctx, mpkt);
+  if (!ret)
+    mpp_packet_deinit (&mpkt);
 
-  return FALSE;
+  return ret;
 }
 
 static MppFrame
