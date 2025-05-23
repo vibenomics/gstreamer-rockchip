@@ -527,7 +527,6 @@ gst_mpp_enc_start (GstVideoEncoder * encoder)
   self->flushing = FALSE;
   self->pending_frames = 0;
   self->frames = NULL;
-  self->required_keyframe_number = 0;
 
   g_mutex_init (&self->mutex);
 
@@ -925,29 +924,6 @@ err:
 }
 
 static gboolean
-gst_mpp_enc_force_keyframe (GstVideoEncoder * encoder, gboolean keyframe)
-{
-  GstMppEnc *self = GST_MPP_ENC (encoder);
-
-  /* HACK: Use gop(1) to force keyframe */
-
-  if (!keyframe) {
-    self->prop_dirty = TRUE;
-    return gst_mpp_enc_apply_properties (encoder);
-  }
-
-  GST_INFO_OBJECT (self, "forcing keyframe");
-  mpp_enc_cfg_set_s32 (self->mpp_cfg, "rc:gop", 1);
-
-  if (self->mpi->control (self->mpp_ctx, MPP_ENC_SET_CFG, self->mpp_cfg)) {
-    GST_WARNING_OBJECT (self, "failed to set enc cfg");
-    return FALSE;
-  }
-
-  return TRUE;
-}
-
-static gboolean
 gst_mpp_enc_send_frame_locked (GstVideoEncoder * encoder)
 {
   GstMppEnc *self = GST_MPP_ENC (encoder);
@@ -975,9 +951,10 @@ gst_mpp_enc_send_frame_locked (GstVideoEncoder * encoder)
 
   keyframe = GST_VIDEO_CODEC_FRAME_IS_FORCE_KEYFRAME (frame);
   if (keyframe) {
-    /* TODO: Find a way to set exact keyframe request */
-    self->required_keyframe_number = frame_number;
-    gst_mpp_enc_force_keyframe (encoder, TRUE);
+    GST_INFO_OBJECT (self, "forcing keyframe");
+
+    if (self->mpi->control (self->mpp_ctx, MPP_ENC_SET_IDR_FRAME, NULL))
+      GST_WARNING_OBJECT (self, "failed to set keyframe request");
   }
 
   /* HACK: Get the converted input buffer from frame->output_buffer */
@@ -1028,12 +1005,6 @@ gst_mpp_enc_poll_packet_locked (GstVideoEncoder * encoder)
 
   if (self->flushing && !self->draining)
     goto drop;
-
-  /* TODO: Remove it when using exact keyframe request */
-  if (frame->system_frame_number == self->required_keyframe_number) {
-    gst_mpp_enc_force_keyframe (encoder, FALSE);
-    self->required_keyframe_number = 0;
-  }
 
   pkt_size = mpp_packet_get_length (mpkt);
   mbuf = mpp_packet_get_buffer (mpkt);

@@ -60,8 +60,6 @@ struct _GstMppEnc
   /* Max number of pending frames */
   guint32 max_pending;
 
-  guint32 required_keyframe_number;
-
   guint pending_frames;
   GMutex event_mutex;
   GCond event_cond;
