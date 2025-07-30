@@ -203,9 +203,13 @@ gst_mpp_rga_info_from_mpp_frame (rga_info_t * info, MppFrame mframe)
   MppBuffer mbuf = mpp_frame_get_buffer (mframe);
   guint width = mpp_frame_get_width (mframe);
   guint height = mpp_frame_get_height (mframe);
-  guint hstride = mpp_frame_get_hor_stride_pixel (mframe);
+  guint hstride = mpp_frame_get_hor_stride (mframe);
   guint vstride = mpp_frame_get_ver_stride (mframe);
   RgaSURF_FORMAT rga_format = gst_mpp_mpp_format_to_rga_format (mpp_format);
+
+  struct gst_mpp_format *format = GST_MPP_GET_FORMAT (mpp, mpp_format);
+  if (format)
+    hstride = hstride / format->pixel_stride0;
 
   g_return_val_if_fail (mbuf, FALSE);
 
