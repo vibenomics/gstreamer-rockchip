@@ -468,11 +468,12 @@ gst_kms_allocator_add_fb (GstKMSAllocator * alloc, GstKMSMemory * kmsmem,
   GST_DEBUG_OBJECT (alloc, "bo handles: %d, %d, %d, %d", bo_handles[0],
       bo_handles[1], bo_handles[2], bo_handles[3]);
 
-  if (GST_VIDEO_INFO_IS_AFBC (vinfo)) {
+  if (GST_VIDEO_INFO_IS_AFBC (vinfo) || GST_VIDEO_INFO_IS_RFBC (vinfo)) {
     guint64 modifiers[4] = { 0 };
 
     for (i = 0; i < num_planes; i++)
-      modifiers[i] = DRM_AFBC_MODIFIER;
+      modifiers[i] =
+        GST_VIDEO_INFO_IS_AFBC (vinfo) ? DRM_AFBC_MODIFIER : DRM_RFBC_MODIFIER;
 
     if (fmt == DRM_FORMAT_NV12 || fmt == DRM_FORMAT_NV12_10 ||
         fmt == DRM_FORMAT_NV16) {
@@ -493,7 +494,7 @@ gst_kms_allocator_add_fb (GstKMSAllocator * alloc, GstKMSMemory * kmsmem,
         _pitches[0] *= 1.5;
       } else {
         _fmt = DRM_FORMAT_YUYV;
-        /* The bpp of YUYV (AFBC) is 16 */
+        /* The bpp of YUYV (FBC) is 16 */
         _pitches[0] *= 2;
       }
 

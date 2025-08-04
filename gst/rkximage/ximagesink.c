@@ -377,8 +377,8 @@ drm_get_caps (GstRkXImageSink * self)
 }
 
 static void
-check_afbc (GstRkXImageSink * self, drmModePlane * plane, guint32 drmfmt,
-    gboolean * linear, gboolean * afbc)
+check_fbc (GstRkXImageSink * self, drmModePlane * plane, guint32 drmfmt,
+    gboolean * linear, gboolean * afbc, gboolean * rfbc)
 {
   drmModeObjectPropertiesPtr props;
   drmModePropertyBlobPtr blob;
@@ -390,7 +390,7 @@ check_afbc (GstRkXImageSink * self, drmModePlane * plane, guint32 drmfmt,
   guint64 value = 0;
   gint i, j;
 
-  *linear = *afbc = FALSE;
+  *linear = *afbc = *rfbc = FALSE;
 
   res = drmModeGetResources (self->fd);
   if (!res)
@@ -446,6 +446,8 @@ check_afbc (GstRkXImageSink * self, drmModePlane * plane, guint32 drmfmt,
 
       if (mod->modifier == DRM_AFBC_MODIFIER)
         *afbc = TRUE;
+      else if (mod->modifier == DRM_RFBC_MODIFIER)
+        *rfbc = TRUE;
       else if (mod->modifier == DRM_FORMAT_MOD_LINEAR)
         *linear = TRUE;
     }
@@ -471,9 +473,9 @@ drm_ensure_allowed_caps (GstRkXImageSink * self, drmModePlane * plane,
     return FALSE;
 
   for (i = 0; i < plane->count_formats; i++) {
-    gboolean linear = FALSE, afbc = FALSE;
+    gboolean linear = FALSE, afbc = FALSE, rfbc = FALSE;
 
-    check_afbc (self, plane, plane->formats[i], &linear, &afbc);
+    check_fbc (self, plane, plane->formats[i], &linear, &afbc, &rfbc);
 
     if (plane->formats[i] == DRM_FORMAT_YUV420_8BIT)
       fmt = GST_VIDEO_FORMAT_NV12;
@@ -502,15 +504,18 @@ drm_ensure_allowed_caps (GstRkXImageSink * self, drmModePlane * plane,
       GstCaps *afbc_caps = gst_caps_copy (caps);
       gst_caps_set_simple (afbc_caps, "arm-afbc", G_TYPE_INT, 1, NULL);
 
-      if (linear) {
-        gst_caps_append (caps, afbc_caps);
-      } else {
-        gst_caps_replace (&caps, afbc_caps);
-        gst_caps_unref (afbc_caps);
-      }
+      out_caps = gst_caps_merge (out_caps, afbc_caps);
     }
 
-    out_caps = gst_caps_merge (out_caps, caps);
+    if (rfbc) {
+      GstCaps *rfbc_caps = gst_caps_copy (caps);
+      gst_caps_set_simple (rfbc_caps, "rfbc", G_TYPE_INT, 1, NULL);
+
+      out_caps = gst_caps_merge (out_caps, rfbc_caps);
+    }
+
+    if ((!afbc && !rfbc) || linear)
+      out_caps = gst_caps_merge (out_caps, caps);
   }
 
   self->allowed_caps = gst_caps_simplify (out_caps);
@@ -663,7 +668,9 @@ gst_kms_sink_propose_allocation (GstBaseSink * bsink, GstQuery * query)
 
   s = gst_caps_get_structure (caps, 0);
   if (gst_structure_get_int (s, "arm-afbc", &value) && value)
-    goto afbc_caps;
+    goto fbc_caps;
+  if (gst_structure_get_int (s, "rfbc", &value) && value)
+    goto fbc_caps;
 
   size = GST_VIDEO_INFO_SIZE (&vinfo);
 
@@ -703,9 +710,9 @@ invalid_caps:
     GST_DEBUG_OBJECT (bsink, "invalid caps specified");
     return FALSE;
   }
-afbc_caps:
+fbc_caps:
   {
-    GST_DEBUG_OBJECT (bsink, "no allocation for AFBC");
+    GST_DEBUG_OBJECT (bsink, "no allocation for FBC");
     return FALSE;
   }
 no_pool:
@@ -817,8 +824,9 @@ gst_kms_sink_copy_to_dumb_buffer (GstRkXImageSink * self, GstBuffer * inbuf)
   gboolean success;
   GstBuffer *buf = NULL;
 
-  if (GST_VIDEO_INFO_IS_AFBC (&self->vinfo)) {
-    GST_ERROR_OBJECT (self, "unable to copy AFBC");
+  if (GST_VIDEO_INFO_IS_AFBC (&self->vinfo) ||
+      GST_VIDEO_INFO_IS_RFBC (&self->vinfo)) {
+    GST_ERROR_OBJECT (self, "unable to copy FBC");
     return NULL;
   }
 
@@ -1256,8 +1264,9 @@ gst_x_image_sink_ximage_put (GstRkXImageSink * ximagesink, GstBuffer * buf)
   result.x += window_x;
   result.y += window_y;
 
-  if (GST_VIDEO_INFO_IS_AFBC (&ximagesink->vinfo))
-    /* The AFBC's width should align to 4 */
+  if (GST_VIDEO_INFO_IS_AFBC (&ximagesink->vinfo) ||
+      GST_VIDEO_INFO_IS_RFBC (&ximagesink->vinfo))
+    /* The FBC's width should align to 4 */
     src.w &= ~3;
 
   GST_TRACE_OBJECT (ximagesink,
@@ -1961,13 +1970,19 @@ gst_x_image_sink_setcaps (GstBaseSink * bsink, GstCaps * caps)
   if (!gst_video_info_from_caps (&info, caps))
     goto invalid_format;
 
-  /* parse AFBC from caps */
+  /* parse FBC from caps */
   s = gst_caps_get_structure (caps, 0);
   if (gst_structure_get_int (s, "arm-afbc", &value)) {
     if (value)
       GST_VIDEO_INFO_SET_AFBC (&info);
     else
       GST_VIDEO_INFO_UNSET_AFBC (&info);
+  }
+  if (gst_structure_get_int (s, "rfbc", &value)) {
+    if (value)
+      GST_VIDEO_INFO_SET_RFBC (&info);
+    else
+      GST_VIDEO_INFO_UNSET_RFBC (&info);
   }
 
   GST_VIDEO_SINK_WIDTH (ximagesink) = info.width;
