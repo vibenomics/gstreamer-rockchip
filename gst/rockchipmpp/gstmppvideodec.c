@@ -46,14 +46,14 @@ G_DEFINE_TYPE (GstMppVideoDec, gst_mpp_video_dec, GST_TYPE_MPP_DEC);
 
 /* Default output format is auto */
 static GstVideoFormat DEFAULT_PROP_FORMAT = GST_VIDEO_FORMAT_UNKNOWN;
-/* Disable ARM AFBC by default */
-static GstVideoFormat DEFAULT_PROP_ARM_AFBC = FALSE;
+/* Disable FBC by default */
+static GstVideoFormat DEFAULT_PROP_FBC = FALSE;
 
 enum
 {
   PROP_0,
   PROP_FORMAT,
-  PROP_ARM_AFBC,
+  PROP_FBC,
   PROP_LAST,
 };
 
@@ -75,7 +75,8 @@ static GstStaticPadTemplate gst_mpp_video_dec_src_template =
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS (MPP_DEC_CAPS_MAKE ("{" MPP_DEC_FORMATS "}") ";"
-        MPP_DEC_CAPS_MAKE_AFBC ("{" MPP_DEC_FORMATS "}") ";")
+        MPP_DEC_CAPS_MAKE_AFBC ("{" MPP_DEC_FORMATS "}") ";"
+        MPP_DEC_CAPS_MAKE_RFBC ("{" MPP_DEC_FORMATS "}") ";")
     );
 
 static MppCodingType
@@ -133,11 +134,11 @@ gst_mpp_video_dec_set_property (GObject * object,
         mppdec->format = g_value_get_enum (value);
       break;
     }
-    case PROP_ARM_AFBC:{
+    case PROP_FBC:{
       if (mppdec->input_state)
-        GST_WARNING_OBJECT (decoder, "unable to change ARM AFBC");
+        GST_WARNING_OBJECT (decoder, "unable to change FBC");
       else
-        mppdec->arm_afbc = g_value_get_boolean (value);
+        mppdec->fbc = g_value_get_boolean (value);
       break;
     }
     default:
@@ -157,8 +158,8 @@ gst_mpp_video_dec_get_property (GObject * object,
     case PROP_FORMAT:
       g_value_set_enum (value, mppdec->format);
       break;
-    case PROP_ARM_AFBC:
-      g_value_set_boolean (value, mppdec->arm_afbc);
+    case PROP_FBC:
+      g_value_set_boolean (value, mppdec->fbc);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -213,7 +214,7 @@ gst_mpp_video_dec_startup (GstVideoDecoder * decoder)
     gst_buffer_unref (codec_data);
   }
 
-  if (mppdec->arm_afbc) {
+  if (mppdec->fbc) {
     MppFrameFormat mpp_format = MPP_FMT_YUV420SP | MPP_FRAME_FBC_AFBC_V2;
     mppdec->mpi->control (mppdec->mpp_ctx, MPP_DEC_SET_OUTPUT_FORMAT,
         &mpp_format);
@@ -329,7 +330,7 @@ gst_mpp_video_dec_init (GstMppVideoDec * self)
 {
   GstMppDec *mppdec = GST_MPP_DEC (self);
   mppdec->format = DEFAULT_PROP_FORMAT;
-  mppdec->arm_afbc = DEFAULT_PROP_ARM_AFBC;
+  mppdec->fbc = DEFAULT_PROP_FBC;
 }
 
 static void
@@ -387,12 +388,13 @@ gst_mpp_video_dec_class_init (GstMppVideoDecClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 #endif
 
-  if (g_getenv ("GST_MPP_VIDEODEC_DEFAULT_ARM_AFBC"))
-    DEFAULT_PROP_ARM_AFBC = TRUE;
+  if (g_getenv ("GST_MPP_VIDEODEC_DEFAULT_ARM_AFBC") ||
+      g_getenv ("GST_MPP_VIDEODEC_DEFAULT_FBC"))
+    DEFAULT_PROP_FBC = TRUE;
 
-  g_object_class_install_property (gobject_class, PROP_ARM_AFBC,
-      g_param_spec_boolean ("arm-afbc", "ARM AFBC",
-          "Prefer ARM AFBC compressed format", DEFAULT_PROP_ARM_AFBC,
+  g_object_class_install_property (gobject_class, PROP_FBC,
+      g_param_spec_boolean ("fbc", "FBC",
+          "Prefer FBC compressed format", DEFAULT_PROP_FBC,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gst_element_class_add_pad_template (element_class,

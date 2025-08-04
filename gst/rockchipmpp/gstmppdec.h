@@ -60,7 +60,7 @@ struct _GstMppDec
 
   guint crop_x, crop_y, crop_w, crop_h;
 
-  gboolean arm_afbc;
+  gboolean fbc;
 
   gboolean dma_feature;
 
@@ -122,6 +122,7 @@ GType gst_mpp_dec_get_type (void);
 #endif
 
 #define MPP_DEC_FEATURE_ARM_AFBC "arm-afbc"
+#define MPP_DEC_FEATURE_RFBC "rfbc"
 
 #define MPP_DEC_CAPS_MAKE(fmts) \
     GST_VIDEO_CAPS_MAKE (fmts) ";" \
@@ -131,6 +132,11 @@ GType gst_mpp_dec_get_type (void);
     GST_VIDEO_CAPS_MAKE (fmts) ", " MPP_DEC_FEATURE_ARM_AFBC " = (int) 1;" \
     GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF, fmts) \
     ", " MPP_DEC_FEATURE_ARM_AFBC " = (int) 1"
+
+#define MPP_DEC_CAPS_MAKE_RFBC(fmts) \
+    GST_VIDEO_CAPS_MAKE (fmts) ", " MPP_DEC_FEATURE_RFBC " = (int) 1;" \
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF, fmts) \
+    ", " MPP_DEC_FEATURE_RFBC " = (int) 1"
 
 void gst_mpp_dec_fixup_video_info (GstVideoDecoder * decoder,
     GstVideoFormat format, gint width, gint height);
