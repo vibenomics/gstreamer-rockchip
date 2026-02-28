@@ -979,19 +979,28 @@ gst_mpp_dec_update_interlace_mode (GstVideoDecoder * decoder,
 static void
 gst_mpp_dec_loop (GstVideoDecoder * decoder)
 {
-  GstMppDecClass *klass = GST_MPP_DEC_GET_CLASS (decoder);
   GstMppDec *self = GST_MPP_DEC (decoder);
   GstVideoCodecFrame *frame;
   GstBuffer *buffer;
-  MppFrame mframe;
-  int timeout, mode;
+  MppFrame mframe = NULL;
+  MppPacket mpkt = NULL;
+  MppMeta meta;
+  gint timeout_ms, mode;
 
-  timeout = self->flushing ? MPP_TIMEOUT_NON_BLOCK : MPP_OUTPUT_TIMEOUT_MS;
+  timeout_ms = self->flushing ? MPP_TIMEOUT_NON_BLOCK : MPP_OUTPUT_TIMEOUT_MS;
+  self->mpi->control (self->mpp_ctx, MPP_SET_OUTPUT_TIMEOUT, &timeout_ms);
 
-  mframe = klass->poll_mpp_frame (decoder, timeout);
+  self->mpi->decode_get_frame (self->mpp_ctx, &mframe);
   /* Likely due to timeout */
   if (!mframe)
     return;
+
+  meta = mpp_frame_get_meta (mframe);
+  mpp_meta_get_packet (meta, KEY_INPUT_PACKET, &mpkt);
+  if (mpkt) {
+    mpp_meta_set_packet (meta, KEY_INPUT_PACKET, NULL);
+    mpp_packet_deinit (&mpkt);
+  }
 
   GST_VIDEO_DECODER_STREAM_LOCK (decoder);
 
@@ -1090,14 +1099,19 @@ drop:
 static GstFlowReturn
 gst_mpp_dec_send_mpp_packet_unlocked (GstVideoDecoder * decoder, MppPacket mpkt)
 {
-  GstMppDecClass *klass = GST_MPP_DEC_GET_CLASS (decoder);
   GstMppDec *self = GST_MPP_DEC (decoder);
+  gint timeout_ms = MPP_INPUT_TIMEOUT_MS;
+
+  self->mpi->control (self->mpp_ctx, MPP_SET_INPUT_TIMEOUT, &timeout_ms);
 
   while (1) {
+    MPP_RET ret;
+
     if (self->task_ret != GST_FLOW_OK)
       return self->task_ret;
 
-    switch (klass->send_mpp_packet (decoder, mpkt, MPP_INPUT_TIMEOUT_MS)) {
+    ret = self->mpi->decode_put_packet (self->mpp_ctx, mpkt);
+    switch (ret) {
       case MPP_OK:
         return GST_FLOW_OK;
       case MPP_ERR_BUFFER_FULL:
@@ -1212,8 +1226,17 @@ send_error:
 drop:
   GST_WARNING_OBJECT (self, "can't handle this frame");
 
-  if (mpkt)
+  if (mpkt) {
+    MppFrame mframe = NULL;
+    MppMeta meta;
+
+    meta = mpp_packet_get_meta (mpkt);
+    mpp_meta_get_frame (meta, KEY_OUTPUT_FRAME, &mframe);
+    if (mframe)
+      mpp_frame_deinit (&mframe);
+
     mpp_packet_deinit (&mpkt);
+  }
 
   gst_buffer_unmap (frame->input_buffer, &mapinfo);
   gst_video_decoder_release_frame (decoder, frame);
