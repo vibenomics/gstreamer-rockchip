@@ -209,6 +209,50 @@ gst_mpp_jpeg_dec_stop (GstVideoDecoder * decoder)
   return TRUE;
 }
 
+static guint
+gst_mpp_jpeg_dec_required_size (GstVideoDecoder * decoder)
+{
+  GstMppDec *mppdec = GST_MPP_DEC (decoder);
+  GstVideoInfo *info = &mppdec->info;
+  GstVideoFormat gst_format;
+  MppFrameFormat mpp_format;
+  MppSysCfg cfg;
+  guint width, height, hstride, vstride, size;
+
+  gst_format = GST_VIDEO_INFO_FORMAT (info);
+  mpp_format = gst_mpp_gst_format_to_mpp_format (gst_format);
+
+  width = GST_VIDEO_INFO_WIDTH (info);
+  height = GST_VIDEO_INFO_HEIGHT (info);
+  hstride = GST_MPP_VIDEO_INFO_HSTRIDE (info);
+  vstride = GST_MPP_VIDEO_INFO_VSTRIDE (info);
+
+  /* FIXME: Workaround MPP's JPEG parser size requirement issue (w * h * 4) */
+  size = width * height * 4;
+
+  /* Based on mpp/base/test/mpp_sys_cfg_test.c */
+
+  if (mpp_sys_cfg_get (&cfg))
+    return size;
+
+  mpp_sys_cfg_set_u32 (cfg, "dec_buf_chk:type", 1);
+  mpp_sys_cfg_set_u32 (cfg, "dec_buf_chk:enable", 1);
+  mpp_sys_cfg_set_u32 (cfg, "dec_buf_chk:type", MPP_VIDEO_CodingMJPEG);
+  mpp_sys_cfg_set_u32 (cfg, "dec_buf_chk:fmt_codec", mpp_format);
+  mpp_sys_cfg_set_u32 (cfg, "dec_buf_chk:fmt_fbc", 0);
+  mpp_sys_cfg_set_u32 (cfg, "dec_buf_chk:width", width);
+  mpp_sys_cfg_set_u32 (cfg, "dec_buf_chk:height", height);
+  mpp_sys_cfg_set_u32 (cfg, "dec_buf_chk:h_stride_by_byte", hstride);
+  mpp_sys_cfg_set_u32 (cfg, "dec_buf_chk:v_stride", vstride);
+
+  mpp_sys_cfg_ioctl (cfg);
+  mpp_sys_cfg_get_u32 (cfg, "dec_buf_chk:size_total", &size);
+
+  mpp_sys_cfg_put (cfg);
+
+  return size;
+}
+
 static gboolean
 gst_mpp_jpeg_dec_set_format (GstVideoDecoder * decoder,
     GstVideoCodecState * state)
@@ -303,11 +347,7 @@ gst_mpp_jpeg_dec_set_format (GstVideoDecoder * decoder,
   if (!gst_mpp_video_info_align (info, 0, 0))
     return FALSE;
 
-  self->buf_size = GST_VIDEO_INFO_SIZE (info);
-
-  /* FIXME: Workaround MPP's JPEG parser size requirement issue (w * h * 2) */
-  self->buf_size =
-      MAX (self->buf_size, GST_VIDEO_INFO_PLANE_OFFSET (info, 1) * 2);
+  self->buf_size = gst_mpp_jpeg_dec_required_size (decoder);
 
   /* Update final output info */
   return gst_mpp_dec_update_simple_video_info (decoder, dst_format,
